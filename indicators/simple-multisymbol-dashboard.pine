@@ -1,0 +1,149 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © TraderJack1971
+
+//@version=6
+indicator("Multi-Symbol Dashboard [Pine v6]", overlay=true)
+
+// --------------------------------------------------------------------------------
+// 1. INPUTS
+// --------------------------------------------------------------------------------
+group_symbols   = "Symbols"
+s01             = input.symbol("NASDAQ:AAPL", "Symbol 1", group=group_symbols)
+s02             = input.symbol("NASDAQ:NVDA", "Symbol 2", group=group_symbols)
+s03             = input.symbol("NASDAQ:TSLA", "Symbol 3", group=group_symbols)
+s04             = input.symbol("NASDAQ:AMD",  "Symbol 4", group=group_symbols)
+s05             = input.symbol("NASDAQ:AMZN", "Symbol 5", group=group_symbols)
+s06             = input.symbol("NASDAQ:MSFT", "Symbol 6", group=group_symbols)
+s07             = input.symbol("NASDAQ:META", "Symbol 7", group=group_symbols)
+s08             = input.symbol("NASDAQ:GOOGL","Symbol 8", group=group_symbols)
+s09             = input.symbol("NASDAQ:NFLX", "Symbol 9", group=group_symbols)
+s10             = input.symbol("COINBASE:BTCUSD", "Symbol 10", group=group_symbols)
+
+group_settings  = "Settings"
+tfInput         = input.timeframe("D", "Timeframe", group=group_settings)
+compactMode     = input.bool(false, "Compact Mode", group=group_settings)
+rsiLength       = input.int(14, "RSI Length", group=group_settings)
+atrLength       = input.int(14, "ATR Length", group=group_settings)
+maFast          = input.int(20, "Trend EMA Fast", group=group_settings)
+maSlow          = input.int(50, "Trend EMA Slow", group=group_settings)
+
+// --------------------------------------------------------------------------------
+// 2. SETUP & UTILS
+// --------------------------------------------------------------------------------
+// Aggregate symbols into an array for iteration
+var symbols = array.from(s01, s02, s03, s04, s05, s06, s07, s08, s09, s10)
+
+// Define colors
+c_bull      = color.new(color.teal, 0)
+c_bear      = color.new(color.maroon, 0)
+c_neutral   = color.new(color.gray, 0)
+c_text      = color.white
+c_bg_dark   = color.new(#1e222d, 0) 
+
+// Helper for formatting
+f_format(val) => str.tostring(val, format.mintick)
+f_pct(val)    => str.tostring(val, "#.##") + "%"
+
+// Custom function to calculate all data in the request context
+// Returns: [price, prev_close, rsi, fast_ma, slow_ma, atr, vol, vol_avg]
+get_symbol_data() =>
+    _close      = close
+    _prev       = close[1]
+    _rsi        = ta.rsi(close, rsiLength)
+    _emaFast    = ta.ema(close, maFast)
+    _emaSlow    = ta.ema(close, maSlow)
+    _atr        = ta.atr(atrLength)
+    _vol        = volume
+    _volAvg     = ta.sma(volume, 20)
+    [_close, _prev, _rsi, _emaFast, _emaSlow, _atr, _vol, _volAvg]
+
+// --------------------------------------------------------------------------------
+// 3. TABLE INITIALIZATION
+// --------------------------------------------------------------------------------
+var table dash = table.new(
+      position.top_right, 
+      columns = 7, 
+      rows    = 11, // 1 Header + 10 Symbols
+      bgcolor = c_bg_dark, 
+      border_width = 1, 
+      border_color = color.new(color.gray, 50), 
+      frame_color  = color.new(color.gray, 50), 
+      frame_width  = 1
+    )
+
+// Size settings based on Compact Toggle
+txtSize = compactMode ? size.small : size.normal
+rowHeight = compactMode ? 4 : 6
+
+if barstate.islast
+    // --------------------------------------------------------------------------------
+    // 4. HEADER GENERATION
+    // --------------------------------------------------------------------------------
+    headers = array.from("Symbol", "Price", "Chg %", "RSI", "Trend", "ATR Risk", "Vol Ratio")
+    for [i, h] in headers
+        table.cell(dash, i, 0, h, text_color=c_text, text_size=txtSize, bgcolor=color.new(color.black, 0))
+
+    // --------------------------------------------------------------------------------
+    // 5. LOOP & DYNAMIC REQUESTS
+    // --------------------------------------------------------------------------------
+    // In v6, request.security calls can be made inside loops dynamically.
+    
+    for [i, symStr] in symbols
+        // Skip empty inputs
+        if symStr != ""
+            // Fetch data tuple
+            [p, p_prev, r, e1, e2, a, v, v_avg] = request.security(symStr, tfInput, get_symbol_data())
+            
+            // --- Calculations ---
+            
+            // 1. Change %
+            chgPct      = ((p - p_prev) / p_prev) * 100
+            col_chg     = chgPct >= 0 ? c_bull : c_bear
+            
+            // 2. RSI Heatmap
+            // Divergent gradient: <30 (Oversold/Bullish potential) to >70 (Overbought/Bearish potential)
+            // Using standard RSI scale: 30=Green, 70=Red
+            col_rsi     = color.from_gradient(r, 30, 70, color.new(color.green, 60), color.new(color.red, 60))
+            
+            // 3. Trend Badge
+            isBull      = e1 > e2
+            txt_trend   = isBull ? "BULL" : "BEAR"
+            col_trend   = isBull ? color.new(color.green, 30) : color.new(color.red, 30)
+            
+            // 4. ATR% (Risk)
+            // Calculate ATR as percentage of price
+            atrPct      = (a / p) * 100
+            // Gradient: 0.5% (Low Risk/Blue) -> 4.0% (High Risk/Orange)
+            col_risk    = color.from_gradient(atrPct, 0.5, 4.0, color.new(color.blue, 70), color.new(color.orange, 20))
+            
+            // 5. Volume Ratio
+            volRatio    = v / v_avg
+            // Highlight if volume is 1.5x average
+            col_vol     = volRatio > 1.5 ? color.new(color.yellow, 80) : color.new(color.gray, 90)
+            
+            // --- Table Population (Row i + 1) ---
+            
+            // Column 0: Symbol
+            // Extract ticker from "EXCHANGE:TICKER"
+            tickerDisplay = str.split(symStr, ":").get(1)
+            table.cell(dash, 0, i + 1, tickerDisplay, text_color=c_text, text_size=txtSize, text_halign=text.align_left)
+            
+            // Column 1: Price
+            table.cell(dash, 1, i + 1, str.tostring(p, format.mintick), text_color=c_text, text_size=txtSize)
+            
+            // Column 2: Change %
+            table.cell(dash, 2, i + 1, f_pct(chgPct), text_color=col_chg, text_size=txtSize)
+            
+            // Column 3: RSI
+            table.cell(dash, 3, i + 1, str.tostring(math.round(r)), text_color=c_text, bgcolor=col_rsi, text_size=txtSize)
+            
+            // Column 4: Trend
+            // In compact mode, we might just show an arrow or empty colored box
+            trendDisplay = compactMode ? (isBull ? "▲" : "▼") : txt_trend
+            table.cell(dash, 4, i + 1, trendDisplay, text_color=c_text, bgcolor=col_trend, text_size=txtSize)
+            
+            // Column 5: ATR Risk
+            table.cell(dash, 5, i + 1, f_pct(atrPct), text_color=c_text, bgcolor=col_risk, text_size=txtSize)
+            
+            // Column 6: Volume Ratio
+            table.cell(dash, 6, i + 1, str.tostring(volRatio, "#.##"), text_color=c_text, bgcolor=col_vol, text_size=txtSize)
